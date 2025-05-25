@@ -1,0 +1,17 @@
+name: trading-model
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - pandas
+  - numpy
+  - scikit-learn
+  - tensorflow
+  - matplotlib
+  - ta-lib
+  - pip:
+      - selenium
+      - beautifulsoup4
+      - webdriver-manager
