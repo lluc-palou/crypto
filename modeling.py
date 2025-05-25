@@ -327,7 +327,7 @@ for ql, qu in quantile_pairs:
                     # quantile_pairs = [(0.1, 0.9)]
                     # validation_performance_metrics = find_best_quantile_performance_metrics(y_truths, y_preds, quantile_pairs)
                     validation_performance_metrics = calculate_performance_metrics(y_truths, y_preds, ql, qu)
-
+                    validation_performance_metrics["quantiles"] = (ql, qu)
                     log_validation(trial_id, target, i+1, validation_performance_metrics, quantile_folder)
 
             # Evaluates generalization on test set
@@ -342,10 +342,10 @@ for ql, qu in quantile_pairs:
             # quantile_pairs = [(0.1, 0.9)]
             # evalutation_performance_metrics = find_best_quantile_performance_metrics(y_true, y_pred, quantile_pairs)
             evalutation_performance_metrics = calculate_performance_metrics(y_true, y_pred, ql, qu)
-            lq, uq = evalutation_performance_metrics["quantiles"]
+            evalutation_performance_metrics["quantiles"] = (ql, qu)
 
             # Conducts a permutation test (sanity check)
-            evalutation_performance_metrics["perm_p_value"] = permutation_test(y_true, y_pred, lq, uq, n_perm=1000)
+            evalutation_performance_metrics["perm_p_value"] = permutation_test(y_true, y_pred, ql, qu, n_perm=1000)
 
             # Saves model and performance metrics
             model_path = f"models/{trial_id}_{target}.keras"
