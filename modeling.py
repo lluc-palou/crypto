@@ -198,8 +198,8 @@ def log_evaluation(trial_id: int, target: str, performance_metrics: dict, config
         "n_short_trades": performance_metrics["n_short"],
         "conf_matrix": json.dumps(performance_metrics["confusion_matrix"]),
         "perm_p_value": performance_metrics["perm_p_value"],
-        "model_path": f"models/{trial_id}_{target}.keras",
-        "config_path": f"architectures/{trial_id}.json"
+        "model_path": performance_metrics["model_path"],
+        "config_path": performance_metrics["config_path"]
     }
 
     log_dir = os.path.join("logs/performance/test", quantile_folder)
@@ -347,9 +347,19 @@ for ql, qu in quantile_pairs:
             # Conducts a permutation test (sanity check)
             evalutation_performance_metrics["perm_p_value"] = permutation_test(y_true, y_pred, ql, qu, n_perm=1000)
 
-            # Saves model and performance metrics
-            model_path = f"models/{trial_id}_{target}.keras"
+            # Manages the directories and paths where model is saved
+            model_dir = os.path.join("models", quantile_folder)
+            os.makedirs(model_dir, exist_ok=True)
+            model_path = os.path.join(model_dir, f"{trial_id}_{target}.keras")
+            evalutation_performance_metrics["model_path"] = model_path
             model.save(model_path)
+
+            # Manages the directories and paths where architecture is saved
+            arch_dir = os.path.join("architectures", quantile_folder)
+            os.makedirs(arch_dir, exist_ok=True)
+            config_path = os.path.join(arch_dir, f"{trial_id}.json")
+            evalutation_performance_metrics["config_path"] = config_path
+
             log_evaluation(trial_id, target, evalutation_performance_metrics, config, quantile_folder)
 
             # Deletes model and clears memory
