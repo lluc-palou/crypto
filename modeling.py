@@ -96,7 +96,7 @@ def calculate_performance_metrics(y_true: pd.DataFrame, y_pred: pd.DataFrame, lo
     # Calculates profit factor
     gross_profit = np.sum(all_returns[all_returns > 0])
     gross_loss = np.abs(np.sum(all_returns[all_returns < 0]))
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.NaN
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.nan
 
     # Calculates classification metrics: positive direction = return > 0
     y_true_bin = (y_true > 0).astype(int)
