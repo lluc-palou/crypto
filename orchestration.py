@@ -3,24 +3,12 @@ import subprocess
 
 # Directory structure
 folders = {
-    "data": "data",
-    "market_data": os.path.join("data", "market_data"),
-    "data_mi": os.path.join("data", "mutual_information"),
-    "data_split": os.path.join("data", "split"),
+    "derived_data": "derived_data",
+    "market_data": "market_data",
     "models": "models",
     "architectures": "architectures",
     "logs": "logs",
-    "logs_perf": os.path.join("logs", "performance"),
-    "logs_val": os.path.join("logs", "performance", "validation"),
-    "logs_test": os.path.join("logs", "performance", "test"),
 }
-
-# Directory structure initialization
-print("Initializing directory structure...\n")
-for label, path in folders.items():
-    os.makedirs(path, exist_ok=True)
-    print(f"    Created directory: {path}")
-print("\nDirectory initialization complete.\n")
 
 def run_script(script_name):
     """
@@ -39,8 +27,8 @@ def run_script(script_name):
     
     print(f"\n{script_name} completed successfully.\n")
 
-# Pipeline steps
-pipeline_steps = [
+# Cold start up pipeline steps
+cold_start_pipeline = [
     ("Step 1: Market data collection", "collect_market_data.py"),
     ("Step 2: Features derivation", "features.py"),
     ("Step 3: Targets derivation", "targets.py"),
@@ -49,12 +37,46 @@ pipeline_steps = [
     ("Step 6: Model selecion", "model_selection.py"),
 ]
 
-# Pipeline execution
-for description, script in pipeline_steps:
+# Cold start up pipeline steps
+warm_start_pipeline = [
+    ("Step 1: Market data collection", "collect_market_data.py"),
+    ("Step 2: Features derivation", "features.py"),
+    ("Step 3: Targets derivation", "targets.py"),
+    ("Step 4: Feature engineering", "feature_engineering.py"),
+    ("Step 5: Features and targets split", "split.py"),
+    ("Step 6: Prediction", "prediction.py"),
+]
+
+# Asks user which pipeline to run
+print("Select pipeline to run:")
+print("  1. Cold start-up pipeline (data collection to model selection)")
+print("  2. Warm start-up pipeline (data collection + prediction)")
+
+choice = input("Enter 1 or 2: ").strip()
+
+if choice == "1":
+    selected_pipeline = cold_start_pipeline
+    
+    # Directory structure initialization
+    print("Initializing directory structure...\n")
+
+    for label, path in folders.items():
+        os.makedirs(path, exist_ok=True)
+        print(f"    Created directory: {path}")
+
+    print("\nDirectory initialization complete.\n")
+
+elif choice == "2":
+    selected_pipeline = warm_start_pipeline
+
+else:
+    print("Invalid input. Exiting.")
+    exit(1)
+
+# Runs selected pipeline
+for description, script in selected_pipeline:
     print(f"\n{description}")
     run_script(script)
 
-# Final summary
-print("All pipeline steps completed successfully.")
-print("Trained models saved in: models/")
-print("Performance logs saved in: logs/validation_performance/ and logs/test_performance/")
+# Final message
+print("Pipeline execution completed successfully.")

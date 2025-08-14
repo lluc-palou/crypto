@@ -1,10 +1,12 @@
 import gc
 import os
 import json
+import glob
 import time
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from pathlib import Path
 from scipy.stats import norm
 from tensorflow.keras.losses import Huber
 from tensorflow.keras import backend as K
@@ -79,7 +81,8 @@ def calculate_performance_metrics(y_true: pd.DataFrame, y_pred: pd.DataFrame, lo
     psr = norm.cdf(psr)
 
     # Calculates cumulative return
-    cumulative_return = np.prod(1 + all_returns) - 1
+    # cumulative_return = np.prod(1 + all_returns) - 1
+    cumulative_return = np.prod(1 + all_returns)
 
     # Calculates volatility
     volatility = np.std(all_returns, ddof=1)
@@ -142,7 +145,7 @@ def find_best_quantile_performance_metrics(y_true, y_pred, quantile_pairs):
     best_metrics["quantiles"] = best_pair
     return best_metrics
 
-def log_validation(trial_id: int, target: str, step: int, performance_metrics: dict, quantile_folder: str) -> None:
+def log_validation(symbol: str, trial_id: int, target: str, step: int, performance_metrics: dict, quantile_folder: str) -> None:
     """
     Logs extended performance metrics for the validation set of a trading model to a CSV file and 
     saves model/config paths.
@@ -164,7 +167,7 @@ def log_validation(trial_id: int, target: str, step: int, performance_metrics: d
         "n_short_trades": performance_metrics["n_short"]
     }
 
-    log_dir = os.path.join("logs/performance/validation", quantile_folder)
+    log_dir = os.path.join(f"logs/{symbol}/performance/validation", quantile_folder)
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"{trial_id}_{target}.csv")
     df_entry = pd.DataFrame([log_entry])
@@ -175,7 +178,7 @@ def log_validation(trial_id: int, target: str, step: int, performance_metrics: d
 
     df_entry.to_csv(log_file, index=False)
 
-def log_evaluation(trial_id: int, target: str, performance_metrics: dict, config: dict, quantile_folder: str) -> None:
+def log_evaluation(symbol: str, trial_id: int, target: str, performance_metrics: dict, config: dict, quantile_folder: str) -> None:
     """
     Logs extended performance metrics for the test set of a trading model to a CSV file and 
     saves model/config paths.
@@ -202,7 +205,7 @@ def log_evaluation(trial_id: int, target: str, performance_metrics: dict, config
         "config_path": performance_metrics["config_path"]
     }
 
-    log_dir = os.path.join("logs/performance/test", quantile_folder)
+    log_dir = os.path.join(f"logs/{symbol}/performance/test", quantile_folder)
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, "generalization.csv")
     df = pd.DataFrame([log_entry])
@@ -253,116 +256,129 @@ def permutation_test(y_true, y_pred, lower_q, upper_q, n_perm, seed=42):
 # -----------------------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------------------
-features_path = "data/X_pca.csv"
-target_path = "data/y.csv"
 
-X = pd.read_csv(features_path, index_col='date')
-y = pd.read_csv(target_path, index_col='date')
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, shuffle=False)
+# Defines data paths
+market_data_path = Path("market_data")
+derived_data_path = Path("derived_data")
 
-X_train.to_csv('data/split/X_train.csv', index=True, header=True)
-X_test.to_csv('data/split/X_test.csv', index=True, header=True)
-y_train.to_csv('data/split/y_train.csv', index=True, header=True)
-y_test.to_csv('data/split/y_test.csv', index=True, header=True)
+# Reads all market data files
+market_data_files = sorted(market_data_path.glob("*.csv"))
 
-n_trials = 20
-initial_lr = 0.001
+for asset in market_data_files:
+    symbol = Path(asset).stem.upper()
+    features_path = Path(f"{derived_data_path}/{symbol}/X_pca.csv")
+    target_path = Path(f"{derived_data_path}/{symbol}/y.csv")
 
-quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95), (0.1, 0.9)]
+    # Loads features, targets and splits data
+    X = pd.read_csv(features_path, index_col='date')
+    y = pd.read_csv(target_path, index_col='date')
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, shuffle=False)
 
-for ql, qu in quantile_pairs:
-    print(f"\nQuantile pair: {ql:.2f}, {qu:.2f}")
-    quantile_folder = f"{int(ql*100):02d}_{int(qu*100):02d}"
+    # Saves splitted data
+    X_train.to_csv(Path(f"{derived_data_path}/{symbol}/X_train.csv"), index=True, header=True)
+    X_test.to_csv(Path(f"{derived_data_path}/{symbol}/X_test.csv"), index=True, header=True)
+    y_train.to_csv(Path(f"{derived_data_path}/{symbol}/y_train.csv"), index=True, header=True)
+    y_test.to_csv(Path(f"{derived_data_path}/{symbol}/y_test.csv"), index=True, header=True)
 
-    for trial_id in range(n_trials):
-        print(f"\nTrial {trial_id} — Starting new trial")
+    n_trials = 20
+    initial_lr = 0.001
+    quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95), (0.1, 0.9)]
+    print(f"\nTraining and evaluating: {symbol}")
 
-        # Randomized model configuration
-        # dropout = np.round(np.random.uniform(0.0, 0.25), 2)
-        window_size = np.random.randint(30, 45)
-        delta = np.round(np.random.uniform(1.5, 3.5), 3)
-        loss_fn = Huber(delta=delta)
-        config = {"window size": float(window_size), "loss": f"Huber({delta})", "lr": float(initial_lr)}
-        print(f"Model configuration: {config}")
+    for ql, qu in quantile_pairs:
+        print(f"\nQuantile pair: {ql:.2f}, {qu:.2f}")
+        quantile_folder = f"{int(ql*100):02d}_{int(qu*100):02d}"
 
-        for target in y_train.columns:
-            print(f"\nTraining model for target: {target}")
+        for trial_id in range(n_trials):
+            print(f"\nTrial {trial_id}")
 
-            # Reshapes data
-            X_train_seq, y_train_seq = reshape_data(X_train, y_train[target], window_size)
-            X_test_seq, y_test_seq = reshape_data(X_test, y_test[target], window_size)
+            # Randomized model configuration
+            # dropout = np.round(np.random.uniform(0.0, 0.25), 2)
+            window_size = np.random.randint(30, 45)
+            delta = np.round(np.random.uniform(1.5, 3.5), 3)
+            loss_fn = Huber(delta=delta)
+            config = {"window size": float(window_size), "loss": f"Huber({delta})", "lr": float(initial_lr)}
+            print(f"Configuration: {config}")
 
-            # Initializes model
-            model = get_model(window_size, input_shape=(window_size, X.shape[1]))
-            # model.summary()
+            for target in y_train.columns:
+                print(f"\nTarget: {target}")
 
-            # Setsup optimizer and compiles model
-            model.compile(optimizer=Adam(learning_rate=initial_lr), loss=loss_fn)
+                # Reshapes data
+                X_train_seq, y_train_seq = reshape_data(X_train, y_train[target], window_size)
+                X_test_seq, y_test_seq = reshape_data(X_test, y_test[target], window_size)
 
-            # Online training (walk-forward validation style)
-            train_loss, preds, truths = [], [], []
-            training_mae, validation_mae = [], []
+                # Initializes model
+                model = get_model(window_size, input_shape=(window_size, X.shape[1]))
+                # model.summary()
 
-            for i in range(len(X_train_seq) - 1):
-                history = model.train_on_batch(X_train_seq[i:i+1], y_train_seq[i:i+1])  
-                train_loss.append(history)                                                       
-                truths.append(y_train_seq[i+1])
-                pred = model.predict(X_train_seq[i+1:i+2], verbose=0)[0][0]                    
-                preds.append(pred)                                                                     
+                # Setsup optimizer and compiles model
+                model.compile(optimizer=Adam(learning_rate=initial_lr), loss=loss_fn)
 
-                # Analyzes training and validation error metrics
-                if (i+1) % 200 == 0 or i == len(X_train) - 2:
-                    current_train_mae = np.mean(train_loss[-200:])
-                    current_val_mae = mean_absolute_error(truths[-200:], preds[-200:])
-                    training_mae.append(current_train_mae)
-                    validation_mae.append(current_val_mae)
-                    print(f"Samples {i+1}/{len(X_train)-1} - Training MAE: {current_train_mae:.4f} - Validation MAE: {current_val_mae:.4f}", end='\n')
+                # Online training (walk-forward validation style)
+                train_loss, preds, truths = [], [], []
+                training_mae, validation_mae = [], []
 
-                # Analyzes validation performance metrics
-                if (i+1) % 365 == 0 and len(truths) >= 365:
-                    y_truths = pd.DataFrame(truths[-365:], columns=[target])
-                    y_preds = pd.DataFrame(preds[-365:], columns=[target])
+                for i in range(len(X_train_seq) - 1):
+                    history = model.train_on_batch(X_train_seq[i:i+1], y_train_seq[i:i+1])  
+                    train_loss.append(history)                                                       
+                    truths.append(y_train_seq[i+1])
+                    pred = model.predict(X_train_seq[i+1:i+2], verbose=0)[0][0]                    
+                    preds.append(pred)                                                                     
 
-                    # quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95)]
-                    # quantile_pairs = [(0.1, 0.9)]
-                    # validation_performance_metrics = find_best_quantile_performance_metrics(y_truths, y_preds, quantile_pairs)
-                    validation_performance_metrics = calculate_performance_metrics(y_truths, y_preds, ql, qu)
-                    validation_performance_metrics["quantiles"] = (ql, qu)
-                    log_validation(trial_id, target, i+1, validation_performance_metrics, quantile_folder)
+                    # Analyzes training and validation error metrics
+                    if (i+1) % 200 == 0 or i == len(X_train) - 2:
+                        current_train_mae = np.mean(train_loss[-200:])
+                        current_val_mae = mean_absolute_error(truths[-200:], preds[-200:])
+                        training_mae.append(current_train_mae)
+                        validation_mae.append(current_val_mae)
+                        print(f"Samples {i+1}/{len(X_train)-1} - Training MAE: {current_train_mae:.4f} - Validation MAE: {current_val_mae:.4f}", end='\n')
 
-            # Evaluates generalization on test set
-            y_pred = model.predict(X_test_seq, verbose=0)
-            y_pred = pd.DataFrame(y_pred, columns=[target])
-            y_pred.reset_index(drop=True, inplace=True)
+                    # Analyzes validation performance metrics
+                    if (i+1) % 365 == 0 and len(truths) >= 365:
+                        y_truths = pd.DataFrame(truths[-365:], columns=[target])
+                        y_preds = pd.DataFrame(preds[-365:], columns=[target])
 
-            y_true = pd.DataFrame(y_test_seq, columns=[target])
-            y_true.reset_index(drop=True, inplace=True)
+                        # quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95)]
+                        # quantile_pairs = [(0.1, 0.9)]
+                        # validation_performance_metrics = find_best_quantile_performance_metrics(y_truths, y_preds, quantile_pairs)
+                        validation_performance_metrics = calculate_performance_metrics(y_truths, y_preds, ql, qu)
+                        validation_performance_metrics["quantiles"] = (ql, qu)
+                        log_validation(trial_id, target, i+1, validation_performance_metrics, quantile_folder)
 
-            # quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95)]
-            # quantile_pairs = [(0.1, 0.9)]
-            # evalutation_performance_metrics = find_best_quantile_performance_metrics(y_true, y_pred, quantile_pairs)
-            evalutation_performance_metrics = calculate_performance_metrics(y_true, y_pred, ql, qu)
-            evalutation_performance_metrics["quantiles"] = (ql, qu)
+                # Evaluates generalization on test set
+                y_pred = model.predict(X_test_seq, verbose=0)
+                y_pred = pd.DataFrame(y_pred, columns=[target])
+                y_pred.reset_index(drop=True, inplace=True)
 
-            # Conducts a permutation test (sanity check)
-            evalutation_performance_metrics["perm_p_value"] = permutation_test(y_true, y_pred, ql, qu, n_perm=1000)
+                y_true = pd.DataFrame(y_test_seq, columns=[target])
+                y_true.reset_index(drop=True, inplace=True)
 
-            # Manages the directories and paths where model is saved
-            model_dir = os.path.join("models", quantile_folder)
-            os.makedirs(model_dir, exist_ok=True)
-            model_path = os.path.join(model_dir, f"{trial_id}_{target}.keras")
-            evalutation_performance_metrics["model_path"] = model_path
-            model.save(model_path)
+                # quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95)]
+                # quantile_pairs = [(0.1, 0.9)]
+                # evalutation_performance_metrics = find_best_quantile_performance_metrics(y_true, y_pred, quantile_pairs)
+                evalutation_performance_metrics = calculate_performance_metrics(y_true, y_pred, ql, qu)
+                evalutation_performance_metrics["quantiles"] = (ql, qu)
 
-            # Manages the directories and paths where architecture is saved
-            arch_dir = os.path.join("architectures", quantile_folder)
-            os.makedirs(arch_dir, exist_ok=True)
-            config_path = os.path.join(arch_dir, f"{trial_id}.json")
-            evalutation_performance_metrics["config_path"] = config_path
+                # Conducts a permutation test (sanity check)
+                evalutation_performance_metrics["perm_p_value"] = permutation_test(y_true, y_pred, ql, qu, n_perm=1000)
 
-            log_evaluation(trial_id, target, evalutation_performance_metrics, config, quantile_folder)
+                # Manages the directories and paths where model is saved
+                model_dir = os.path.join(f"models/{symbol}", quantile_folder)
+                os.makedirs(model_dir, exist_ok=True)
+                model_path = os.path.join(model_dir, f"{trial_id}_{target}.h5")
+                evalutation_performance_metrics["model_path"] = model_path
+                model.save(model_path)
 
-            # Deletes model and clears memory
-            del model
-            K.clear_session()
-            gc.collect()
+                # Manages the directories and paths where architecture is saved
+                arch_dir = os.path.join(f"architectures/{symbol}", quantile_folder)
+                os.makedirs(arch_dir, exist_ok=True)
+                config_path = os.path.join(arch_dir, f"{trial_id}.json")
+                evalutation_performance_metrics["config_path"] = config_path
+
+                log_evaluation(trial_id, target, evalutation_performance_metrics, config, quantile_folder)
+
+                # Deletes model and clears memory
+                del model
+                K.clear_session()
+                gc.collect()
+                print("\n")

@@ -1,8 +1,10 @@
+import glob
 import time
 import warnings
 import talib as ta
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 def read_market_data(file_path: str) -> pd.DataFrame:
     """
@@ -108,56 +110,67 @@ class SequentialStandardizer:
 
 if __name__ == "__main__":
     # Defines data paths
-    input_path = 'data/market_data/BTC.csv'
-    output_path = 'data/X.csv'
+    market_data_path = Path("market_data")
+    per_asset_features = 'X.csv'
+    derived_data_path = Path("derived_data")
+    
+    # Reads all market data files
+    market_data_files = sorted(market_data_path.glob("*.csv"))
 
-    # Step 1: Reads market data
-    print(f"Reading market data from {input_path}...")
+    for asset in market_data_files:
+        symbol = Path(asset).stem.upper()
+        per_asset_features_dir = Path(f"{derived_data_path}/{symbol}")
+        per_asset_features_dir.mkdir(parents=True, exist_ok=True)
+        input_path = Path(f"{market_data_path}/{symbol}.csv")
+        output_path = Path(f"{per_asset_features_dir}/{per_asset_features}")
 
-    start_time = time.time()
-    market_data = read_market_data(input_path)
-    end_time = time.time()
+        # Step 1: Reads market data
+        print(f"Reading market data from {input_path}...")
 
-    print(f"Raw market data loaded in {end_time - start_time:.2f} seconds.")
-    print(f"Rows: {market_data.shape[0]}, Columns: {market_data.shape[1]}")
-    print(f"Columns: {list(market_data.columns)}")
+        start_time = time.time()
+        market_data = read_market_data(input_path)
+        end_time = time.time()
 
-    # Step 2: Calculates features
-    print("Calculating features...")
+        print(f"Raw market data loaded in {end_time - start_time:.2f} seconds.")
+        print(f"Rows: {market_data.shape[0]}, Columns: {market_data.shape[1]}")
+        print(f"Columns: {list(market_data.columns)}")
 
-    time_periods = [2, 3, 5, 7, 10, 14, 15, 21, 30, 42, 50, 60, 75, 90]
+        # Step 2: Calculates features
+        print("Calculating features...")
 
-    print(f"Using time windows of: {time_periods} (days)")
+        time_periods = [2, 3, 5, 7, 10, 14, 15, 21, 30, 42, 50, 60, 75, 90]
 
-    start_time = time.time()
-    features = calculate_features(market_data, time_periods)
-    end_time = time.time()
+        print(f"Using time windows of: {time_periods} (days)")
 
-    print(f"Feature calculation completed in {end_time - start_time:.2f} seconds.")
-    print(f"Rows: {features.shape[0]}, Columns: {features.shape[1]}")
+        start_time = time.time()
+        features = calculate_features(market_data, time_periods)
+        end_time = time.time()
 
-    # Step 3: Standardizes features sequentially
-    print("Standardizing features sequentially...")
+        print(f"Feature calculation completed in {end_time - start_time:.2f} seconds.")
+        print(f"Rows: {features.shape[0]}, Columns: {features.shape[1]}")
 
-    start_time = time.time()
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        standardizer = SequentialStandardizer()
-        features_norm = standardizer.transform_sequentially(features)
-    end_time = time.time()
+        # Step 3: Standardizes features sequentially
+        print("Standardizing features sequentially...")
 
-    print(f"Feature standardization completed in {end_time - start_time:.2f} seconds.")
-    print(f"Rows: {features.shape[0]}, Columns: {features.shape[1]}")
+        start_time = time.time()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            standardizer = SequentialStandardizer()
+            features_norm = standardizer.transform_sequentially(features)
+        end_time = time.time()
 
-    features_norm_df = pd.DataFrame(
-        features_norm,
-        columns=features.columns,
-        index=features.index
-    ).astype(np.float64)
+        print(f"Feature standardization completed in {end_time - start_time:.2f} seconds.")
+        print(f"Rows: {features.shape[0]}, Columns: {features.shape[1]}")
 
-    features_norm_df.iloc[:2, :] = np.nan        # Sets first two rows to NaN as they are not standardized
-    features_norm_df = features_norm_df.dropna() # Drops NaN values
+        features_norm_df = pd.DataFrame(
+            features_norm,
+            columns=features.columns,
+            index=features.index
+        ).astype(np.float64)
 
-    # Step 4: Saves standardized features to csv
-    print("Saving standardized features to csv...")
-    features_norm_df.to_csv(output_path, index=True, header=True)
+        features_norm_df.iloc[:2, :] = np.nan        # Sets first two rows to NaN as they are not standardized
+        features_norm_df = features_norm_df.dropna() # Drops NaN values
+
+        # Step 4: Saves standardized features to csv
+        print("Saving standardized features to csv...\n")
+        features_norm_df.to_csv(output_path, index=True, header=True)

@@ -1,6 +1,7 @@
 import os
 import time
 import pandas as pd
+from pathlib import Path
 from datetime import datetime
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -23,7 +24,7 @@ class CoinMarketCapScraper:
         try:
             print(f"Connecting to {url}...")
             self.driver.get(url)
-            time.sleep(10)
+            time.sleep(15)
             print("Connection established.")
 
         except Exception as e:
@@ -37,7 +38,7 @@ class CoinMarketCapScraper:
 
         while True:
             try:
-                button = self.driver.find_element(By.CLASS_NAME, 'sc-7d96a92a-0.hOXHRi')
+                button = self.driver.find_element(By.CLASS_NAME, 'sc-c0a10c7b-0.keYVYU')
                 self.driver.execute_script("arguments[0].scrollIntoView(true);", button)
                 button.click()
                 time.sleep(3)
@@ -84,20 +85,26 @@ class CoinMarketCapScraper:
 if __name__ == "__main__":
     # Assets to scrape
     assets = {
-        'BTC': 'https://coinmarketcap.com/currencies/bitcoin/historical-data/'
+        'BTC': 'https://coinmarketcap.com/currencies/bitcoin/historical-data/',
+        'ETH': 'https://coinmarketcap.com/currencies/ethereum/historical-data/',
+        'XRP': 'https://coinmarketcap.com/currencies/xrp/historical-data/',
+        'SOL': 'https://coinmarketcap.com/currencies/solana/historical-data/',
+        'DOGE': 'https://coinmarketcap.com/currencies/dogecoin/historical-data/',
+        'TRX': 'https://coinmarketcap.com/currencies/tron/historical-data/',
+        'ADA': 'https://coinmarketcap.com/currencies/cardano/historical-data/'
     }
 
     print("Starting market data collection from CoinMarketCap...\n")
 
     driver = webdriver.Firefox(service=Service(GeckoDriverManager().install()))
     scraper = CoinMarketCapScraper(driver)
-    output_path = 'data/market_data'
+    market_data_path = Path("market_data")
 
     try:
         for asset, url in assets.items():
             print(f"Collecting {asset} market data.")
             scraper.establish_connection(url)
-            scraper.scrape_market_data(asset, output_path)
+            scraper.scrape_market_data(asset, market_data_path)
             time.sleep(3)
 
     finally:

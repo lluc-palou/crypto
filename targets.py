@@ -1,7 +1,9 @@
 import os
 import time
+import glob
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 def read_market_data(path: str) -> pd.DataFrame:
     """
@@ -38,34 +40,45 @@ def calculate_targets(market_data: pd.DataFrame, time_periods: list) -> pd.DataF
 
 if __name__ == "__main__":
     # Defines data paths
-    input_path = 'data/market_data/BTC.csv'
-    output_path = 'data/y.csv'
+    market_data_path = Path("market_data")
+    per_asset_targets = 'y.csv'
+    derived_data_path = Path("derived_data")
 
-    # Step 1: Reads market data
-    print(f"Reading market data from {input_path}...")
+    # Reads all market data files
+    market_data_files = sorted(market_data_path.glob("*.csv"))
 
-    start_time = time.time()
-    market_data = read_market_data(input_path)
-    end_time = time.time()
+    for asset in market_data_files:
+        symbol = Path(asset).stem.upper()
+        per_asset_targets_dir = Path(f"{derived_data_path}/{symbol}")
+        per_asset_targets_dir.mkdir(parents=True, exist_ok=True)
+        input_path = Path(f"{market_data_path}/{symbol}.csv")
+        output_path = Path(f"{per_asset_targets_dir}/{per_asset_targets}")
 
-    print(f"Raw market data loaded in {end_time - start_time:.2f} seconds.")
-    print(f"Rows: {market_data.shape[0]}, Columns: {market_data.shape[1]}")
-    print(f"Columns: {list(market_data.columns)}")
+        # Step 1: Reads market data
+        print(f"Reading market data from {input_path}...")
 
-    # Step 2: Calculates targets
-    print("Calculating targets...")
+        start_time = time.time()
+        market_data = read_market_data(input_path)
+        end_time = time.time()
 
-    time_periods = [1, 2, 3, 5, 7]
+        print(f"Raw market data loaded in {end_time - start_time:.2f} seconds.")
+        print(f"Rows: {market_data.shape[0]}, Columns: {market_data.shape[1]}")
+        print(f"Columns: {list(market_data.columns)}")
 
-    print(f"Using forward time periods: {time_periods} (days)")
+        # Step 2: Calculates targets
+        print("Calculating targets...")
 
-    start_time = time.time()
-    targets = calculate_targets(market_data, time_periods)
-    end_time = time.time()
+        time_periods = [1, 2, 3, 5, 7]
 
-    print(f"Targets calculation completed in {end_time - start_time:.2f} seconds.")
-    print(f"Rows: {targets.shape[0]}, Columns: {targets.shape[1]}")
+        print(f"Using forward time periods: {time_periods} (days)")
 
-    # Step 3: Saves targets to csv
-    print("Saving targets to csv...")
-    targets.to_csv(output_path, index=True, header=True)
+        start_time = time.time()
+        targets = calculate_targets(market_data, time_periods)
+        end_time = time.time()
+
+        print(f"Targets calculation completed in {end_time - start_time:.2f} seconds.")
+        print(f"Rows: {targets.shape[0]}, Columns: {targets.shape[1]}")
+
+        # Step 3: Saves targets to csv
+        print("Saving targets to csv...\n")
+        targets.to_csv(output_path, index=True, header=True)
