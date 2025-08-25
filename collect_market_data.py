@@ -85,13 +85,7 @@ class CoinMarketCapScraper:
 if __name__ == "__main__":
     # Assets to scrape
     assets = {
-        'BTC': 'https://coinmarketcap.com/currencies/bitcoin/historical-data/',
-        'ETH': 'https://coinmarketcap.com/currencies/ethereum/historical-data/',
-        'XRP': 'https://coinmarketcap.com/currencies/xrp/historical-data/',
-        'SOL': 'https://coinmarketcap.com/currencies/solana/historical-data/',
-        'DOGE': 'https://coinmarketcap.com/currencies/dogecoin/historical-data/',
-        'TRX': 'https://coinmarketcap.com/currencies/tron/historical-data/',
-        'ADA': 'https://coinmarketcap.com/currencies/cardano/historical-data/'
+        'BTC': 'https://coinmarketcap.com/currencies/bitcoin/historical-data/'
     }
 
     print("Starting market data collection from CoinMarketCap...\n")

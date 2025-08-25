@@ -167,9 +167,9 @@ def log_validation(symbol: str, trial_id: int, target: str, step: int, performan
         "n_short_trades": performance_metrics["n_short"]
     }
 
-    log_dir = os.path.join(f"logs/{symbol}/performance/validation", quantile_folder)
+    log_dir = os.path.join(Path(f"logs/{symbol}/performance/validation"), quantile_folder)
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"{trial_id}_{target}.csv")
+    log_file = os.path.join(Path(f"{log_dir}"), Path(f"{trial_id}_{target}.csv"))
     df_entry = pd.DataFrame([log_entry])
 
     if os.path.exists(log_file):
@@ -205,9 +205,9 @@ def log_evaluation(symbol: str, trial_id: int, target: str, performance_metrics:
         "config_path": performance_metrics["config_path"]
     }
 
-    log_dir = os.path.join(f"logs/{symbol}/performance/test", quantile_folder)
+    log_dir = os.path.join(Path(f"logs/{symbol}/performance/test"), quantile_folder)
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "generalization.csv")
+    log_file = os.path.join(Path(f"{log_dir}"), "generalization.csv")
     df = pd.DataFrame([log_entry])
 
     if os.path.exists(log_file):
@@ -343,7 +343,7 @@ for asset in market_data_files:
                         # validation_performance_metrics = find_best_quantile_performance_metrics(y_truths, y_preds, quantile_pairs)
                         validation_performance_metrics = calculate_performance_metrics(y_truths, y_preds, ql, qu)
                         validation_performance_metrics["quantiles"] = (ql, qu)
-                        log_validation(trial_id, target, i+1, validation_performance_metrics, quantile_folder)
+                        log_validation(symbol, trial_id, target, i+1, validation_performance_metrics, quantile_folder)
 
                 # Evaluates generalization on test set
                 y_pred = model.predict(X_test_seq, verbose=0)
@@ -363,19 +363,19 @@ for asset in market_data_files:
                 evalutation_performance_metrics["perm_p_value"] = permutation_test(y_true, y_pred, ql, qu, n_perm=1000)
 
                 # Manages the directories and paths where model is saved
-                model_dir = os.path.join(f"models/{symbol}", quantile_folder)
+                model_dir = os.path.join(Path(f"models/{symbol}"), quantile_folder)
                 os.makedirs(model_dir, exist_ok=True)
-                model_path = os.path.join(model_dir, f"{trial_id}_{target}.h5")
+                model_path = os.path.join(model_dir, Path(f"{trial_id}_{target}.h5"))
                 evalutation_performance_metrics["model_path"] = model_path
                 model.save(model_path)
 
                 # Manages the directories and paths where architecture is saved
-                arch_dir = os.path.join(f"architectures/{symbol}", quantile_folder)
+                arch_dir = os.path.join(Path(f"architectures/{symbol}"), quantile_folder)
                 os.makedirs(arch_dir, exist_ok=True)
-                config_path = os.path.join(arch_dir, f"{trial_id}.json")
+                config_path = os.path.join(arch_dir, Path(f"{trial_id}.json"))
                 evalutation_performance_metrics["config_path"] = config_path
 
-                log_evaluation(trial_id, target, evalutation_performance_metrics, config, quantile_folder)
+                log_evaluation(symbol, trial_id, target, evalutation_performance_metrics, config, quantile_folder)
 
                 # Deletes model and clears memory
                 del model

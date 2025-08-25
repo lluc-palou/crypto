@@ -4,12 +4,13 @@ import numpy as np
 import pandas as pd
 from glob import glob
 from pathlib import Path
+from datetime import datetime
 from tensorflow.keras.models import load_model
 
 def load_top_models(symbol: str, models_dir: str, architectures_dir: str, logs_dir: str):
     top_models_info = []
 
-    for path in glob(os.path.join(Path(f"{logs_dir}/{symbol}/ranking"), "ranking_*.csv")):
+    for path in glob(os.path.join(Path(f"{logs_dir}/{symbol}/model_ranking"), "ranking_*.csv")):
         quantile = os.path.basename(path).replace("ranking_", "").replace(".csv", "")
         df = pd.read_csv(path)
 
@@ -17,7 +18,7 @@ def load_top_models(symbol: str, models_dir: str, architectures_dir: str, logs_d
             print(f"Skipping {quantile}: ranking is empty.")
             continue
 
-        best_model = df.iloc[0]
+        best_model = df.iloc[0].copy()
         model_id = str(best_model["model_id"])
         target = best_model["target"]
 
@@ -43,7 +44,8 @@ def load_top_models(symbol: str, models_dir: str, architectures_dir: str, logs_d
             "model_id": model_id,
             "target": target,
             "model": model,
-            "window_size": window_size
+            "window_size": window_size,
+            "ranking_row": best_model
         })
 
     return top_models_info
@@ -100,14 +102,15 @@ if __name__ == '__main__':
         y_test = pd.read_csv(Path(f"{derived_data_path}/{symbol}/y_test.csv"))
         y_test = y_test.set_index('date')
 
+        symbol_results = []
+
         for model_info in top_models_info:
             quantile = model_info["quantile"]
             model_id = model_info["model_id"]
             target = model_info["target"]
             model = model_info["model"]
             window_size = model_info["window_size"]
-
-            print(f"\n=== Prediction from model {model_id} for target '{target}' (quantile: {quantile}) ===")
+            ranking_row = model_info["ranking_row"]
 
             if target not in y_test.columns:
                 print(f"Target '{target}' not found in y_test. Skipping.")
@@ -132,9 +135,6 @@ if __name__ == '__main__':
             s_thresh = np.quantile(y_pred, lq)
             l_thresh = np.quantile(y_pred, uq)
 
-            print(f"Short threshold: {s_thresh:.6f}")
-            print(f"Long threshold : {l_thresh:.6f}")
-
             # Predicts last window
             X_last = get_last_window(X_test, int(window_size))
             y_last_pred = model.predict(X_last, verbose=0)[0][0]
@@ -149,5 +149,40 @@ if __name__ == '__main__':
             else:
                 decision = "Neutral"
 
-            print(f"Predicted value: {y_last_pred:.6f}")
-            print(f"Decision: {decision}")    
+            # Builds specific model result row
+            row = {
+                "symbol": symbol,
+                "quantile": quantile,
+                "model_id": model_id,
+                "target": target,
+                "predicted_value": y_last_pred,
+                "short_threshold": s_thresh,
+                "long_threshold": l_thresh,
+                "decision": decision,
+            }   
+
+            # Attaches validation metrics
+            val_metrics = [
+                "val_sharpe_ewma", "val_sharpe_std", "val_drawdown_ewma",
+                "val_hit_ratio_ewma", "val_pf_ewma", "val_trades_total",
+                "test_sharpe", "test_drawdown", "test_hit_ratio",
+                "test_pf", "test_trades_total", "test_perm_p_value"
+            ]
+
+            for metric in val_metrics:
+                if metric in ranking_row:
+                    row[metric] = ranking_row[metric]
+
+            symbol_results.append(row)
+        
+        # Saves results
+        results_dir = Path(f"{logs_dir}/{symbol}/results")
+        results_dir.mkdir(parents=True, exist_ok=True)
+        today = datetime.now().strftime("%Y-%m-%d")
+        results_path = results_dir / f"predictions_{today}.csv"
+        pd.DataFrame(symbol_results).to_csv(results_path, index=False)
+
+        
+
+
+        
