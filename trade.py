@@ -2,6 +2,7 @@ import os
 import re
 import hmac
 import time
+import math
 import json
 import base64
 import hashlib
@@ -41,8 +42,8 @@ def parse_quantiles(qstr: str):
     """
     Parse (lq, uq) string into (lq, uq) floats like.
     """
-    clean = qstr.strip().replace("(", "").replace(")", "")
-    lqs, uqs = clean.split(",")
+    clean = qstr.strip()
+    lqs, uqs = clean.split("_")
 
     return float(lqs.strip()), float(uqs.strip())
     
@@ -89,7 +90,7 @@ def calculate_leverage(row: pd.Series) -> float:
         return max_leverage
     
     else:
-        return float(round(L))
+        return float(math.floor(L))
 
 def build_execution_plan(results_dir):
     """
@@ -246,11 +247,9 @@ def load_state(state_path: str):
         "is_open": False,
         "side": None,
         "open_time": None,
-        "days_open": 0,
+        "days_open": 1,
         "target_days": 0,
-        "txid": None,
-        "leverage": 1.0,
-        "pair": PAIR
+        "leverage": 1.0
     }
 
 def save_state(state_path: str, state: dict):
@@ -373,16 +372,16 @@ def trade(advisor_info: pd.Series, decision: str, leverage: float, state_path: s
             return  # Nothing to do
         
         # Order life has expired, order is closed
-        if days_open >= max(cur_tgt, 1):
+        if days_open >= max(cur_tgt, 1) - 1:
             close_existing_position(k, state)
             state.update(
                 {
                     "is_open": False,
                     "side": None,
                     "open_time": None,
-                    "days_open": 0,
+                    "days_open": 1,
                     "target_days": 0,
-                    "leverage": state.get("leverage", 1.0)
+                    "leverage": 1.0
                 }
             )
 
@@ -390,7 +389,7 @@ def trade(advisor_info: pd.Series, decision: str, leverage: float, state_path: s
         else:
             state["days_open"] = days_open + 1
 
-        save_state(state)
+        save_state(state_path, state)
 
         return
     
@@ -430,7 +429,7 @@ def trade(advisor_info: pd.Series, decision: str, leverage: float, state_path: s
                 }
             )
 
-    save_state(state)
+    save_state(state_path, state)
 
 # ---------------------------------------------------------------------------------------
 # MAIN
