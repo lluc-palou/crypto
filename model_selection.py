@@ -104,6 +104,10 @@ if __name__ == "__main__":
             if os.path.isdir(os.path.join(validation_base, folder))
         ])
 
+        # Quantiles removed in production
+        remove_quantiles = ["10_90", "05_95"]
+        quantile_folders = [q for q in quantile_folders if q not in remove_quantiles]
+
         for q_folder in quantile_folders:
             val_path = os.path.join(validation_base, q_folder)
             test_path = os.path.join(test_base, q_folder)
