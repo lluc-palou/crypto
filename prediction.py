@@ -36,7 +36,7 @@ def load_top_models(symbol: str, models_dir: str, architectures_dir: str, logs_d
         with open(architecture_path, "r") as f:
             config = json.load(f)
 
-        model = load_model(model_path)
+        model = load_model(model_path, compile=False)
         window_size = config.get("window size")
 
         top_models_info.append({

@@ -1,0 +1,426 @@
+import gc
+import os
+import json
+import glob
+import time
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from pathlib import Path
+from scipy.stats import norm
+from collections import deque
+from tensorflow.keras.losses import Huber
+from tensorflow.keras import backend as K
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import Sequential
+from sklearn.metrics import mean_absolute_error
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+
+# -----------------------------------------------------------------------------------------
+# Utility functions
+# -----------------------------------------------------------------------------------------
+def reshape_data(X, y, window_size):
+    """
+    Reshapes the datasets into input sequences and corresponding targets required for the
+    model.
+    """
+    # Converts to numpy arrays
+    if isinstance(X, (pd.DataFrame, pd.Series)): X = X.values
+    if isinstance(y, (pd.DataFrame, pd.Series)): y = y.values
+
+    X_seq, y_seq = [], []
+
+    for i in range(len(X) - window_size):
+        X_seq.append(X[i:i+window_size])
+        y_seq.append(y[i + window_size])
+
+    return np.array(X_seq), np.array(y_seq)
+
+def get_model(window_size: int, input_shape: int) -> Sequential:
+    """
+    Given the input shape (number of features), this function initializes a regression model 
+    with the below architecture:
+    """
+    # Initialize the model
+    model = Sequential()
+
+    # Adds the lstm layers
+    model.add(LSTM(window_size, input_shape=input_shape, return_sequences=True))
+    model.add(LSTM(window_size // 2, return_sequences=False))
+
+    # Adds the output layer
+    model.add(Dense(1, activation='linear'))
+
+    return model
+
+def calculate_robust_sigma_from_residuals(res_window) -> float:
+    """
+    Calculates a robus sigma via MAD with a rolling window of residuals.
+    """
+    if not res_window:
+        return 1.0
+    
+    arr = np.fromiter(res_window, dtype=float)
+    med = np.median(arr)
+    mad = np.median(np.abs(arr - med))
+
+    return max(1.4826 * mad, 1e-6)
+
+def adaptative_huber_loss(delta_var: tf.Variable):
+    """
+    Calculates an adaptative Huber loss using precomputed parameter delta, which adjusts Huber to 
+    residuals recent distribution.
+    """
+    @tf.function
+    def loss(y_true, y_pred):
+        e = y_true - y_pred
+        a = tf.abs(e)
+        d = tf.cast(delta_var, y_pred.dtype)
+
+        return tf.where(a <= d, 0.5*tf.square(e), d*(a - 0.5*d))
+    
+    return loss
+
+def calculate_performance_metrics(y_true: pd.DataFrame, y_pred: pd.DataFrame, lower_q: float, upper_q: float) -> dict:
+    """
+    Given the true, predicted values of test set, the lower and upper quantiles that define position
+    direction, this function calculates performance metrics for a trading strategy such as: sharpe ratio, 
+    probabilistic sharpe ratio (sharpe ratio statistical significance), precision, recall, F1 score, 
+    confusion matrix, cumulative return, volatility, max drawdown, hit ratio, and profit factor.
+    """
+    # Calculates the quantiles of the strategy predicted values
+    s_thresh = np.quantile(y_pred, lower_q)
+    l_thresh = np.quantile(y_pred, upper_q)
+
+    # Calculates the direction of the positions based on the quantile thresholds
+    s_mask = y_pred <= s_thresh
+    l_mask = y_pred >= l_thresh
+
+    # Calculates the returns of the strategy based on the true values
+    s_returns = -(np.exp(y_true[s_mask].dropna()) - 1).values
+    l_returns = (np.exp(y_true[l_mask].dropna()) - 1).values
+    all_returns = np.concatenate([s_returns, l_returns])
+
+    # Calculates sharpe and probabilistic sharpe ratio
+    sharpe = np.mean(all_returns) / np.std(all_returns, ddof=1)
+    std_error = np.sqrt((1 + 0.5 * sharpe**2) / len(all_returns))
+    psr = (sharpe / std_error)
+    psr = norm.cdf(psr)
+
+    # Calculates cumulative return
+    # cumulative_return = np.prod(1 + all_returns) - 1
+    cumulative_return = np.prod(1 + all_returns)
+
+    # Calculates volatility
+    volatility = np.std(all_returns, ddof=1)
+
+    # Calculates max drawdown
+    equity_curve = np.cumprod(1 + all_returns)
+    peak = np.maximum.accumulate(equity_curve)
+    drawdown = (peak - equity_curve) / peak
+    max_drawdown = np.max(drawdown)
+
+    # Calculates hit ratio
+    hit_ratio = np.mean(all_returns > 0)
+
+    # Calculates profit factor
+    gross_profit = np.sum(all_returns[all_returns > 0])
+    gross_loss = np.abs(np.sum(all_returns[all_returns < 0]))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.nan
+
+    # Calculates classification metrics: positive direction = return > 0
+    y_true_bin = (y_true > 0).astype(int)
+    y_pred_bin = (y_pred > 0).astype(int)
+
+    precision = precision_score(y_true_bin, y_pred_bin)
+    recall = recall_score(y_true_bin, y_pred_bin)
+    f1 = f1_score(y_true_bin, y_pred_bin)
+    conf_matrix = confusion_matrix(y_true_bin, y_pred_bin)
+
+    return {
+        "sharpe": sharpe,
+        "psr": psr,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "confusion_matrix": conf_matrix.tolist(),
+        "cumulative_return": cumulative_return,
+        "volatility": volatility,
+        "max_drawdown": max_drawdown,
+        "hit_ratio": hit_ratio,
+        "profit_factor": profit_factor,
+        "n_long": len(l_returns),
+        "n_short": len(s_returns)
+    }
+
+def find_best_quantile_performance_metrics(y_true, y_pred, quantile_pairs):
+    """
+    Given the true, predicted values of test set and the quantile pairs that define position direction,
+    this function calculates performance metrics for a trading strategy and returns the best pair of quantiles
+    based on the highest sharpe ratio.
+    """
+    best_metrics = None
+    best_pair = None
+
+    for lq, uq in quantile_pairs:
+        metrics = calculate_performance_metrics(y_true, y_pred, lq, uq)
+
+        if (best_metrics is None) or (metrics["sharpe"] > best_metrics["sharpe"]):
+            best_metrics = metrics
+            best_pair = (lq, uq)
+
+    best_metrics["quantiles"] = best_pair
+    return best_metrics
+
+def log_validation(symbol: str, trial_id: int, target: str, step: int, performance_metrics: dict, quantile_folder: str) -> None:
+    """
+    Logs extended performance metrics for the validation set of a trading model to a CSV file and 
+    saves model/config paths.
+    """
+    log_entry = {
+        "step": step,
+        "quantiles": performance_metrics["quantiles"],
+        "sharpe": performance_metrics["sharpe"],
+        "psr": performance_metrics["psr"],
+        "precision": performance_metrics["precision"],
+        "recall": performance_metrics["recall"],
+        "f1_score": performance_metrics["f1"],
+        "cumulative_return": performance_metrics["cumulative_return"],
+        "volatility": performance_metrics["volatility"],
+        "max_drawdown": performance_metrics["max_drawdown"],
+        "hit_ratio": performance_metrics["hit_ratio"],
+        "profit_factor": performance_metrics["profit_factor"],
+        "n_long_trades": performance_metrics["n_long"],
+        "n_short_trades": performance_metrics["n_short"]
+    }
+
+    log_dir = os.path.join(Path(f"logs/{symbol}/performance/validation"), quantile_folder)
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(Path(f"{log_dir}"), Path(f"{trial_id}_{target}.csv"))
+    df_entry = pd.DataFrame([log_entry])
+
+    if os.path.exists(log_file):
+        existing_df = pd.read_csv(log_file)
+        df_entry = pd.concat([existing_df, df_entry], ignore_index=True)
+
+    df_entry.to_csv(log_file, index=False)
+
+def log_evaluation(symbol: str, trial_id: int, target: str, performance_metrics: dict, config: dict, quantile_folder: str) -> None:
+    """
+    Logs extended performance metrics for the test set of a trading model to a CSV file and 
+    saves model/config paths.
+    """
+    log_entry = {
+        "trial_id": trial_id,
+        "target": target,
+        "quantiles": performance_metrics["quantiles"],
+        "sharpe": performance_metrics["sharpe"],
+        "psr": performance_metrics["psr"],
+        "precision": performance_metrics["precision"],
+        "recall": performance_metrics["recall"],
+        "f1_score": performance_metrics["f1"],
+        "cumulative_return": performance_metrics["cumulative_return"],
+        "volatility": performance_metrics["volatility"],
+        "max_drawdown": performance_metrics["max_drawdown"],
+        "hit_ratio": performance_metrics["hit_ratio"],
+        "profit_factor": performance_metrics["profit_factor"],
+        "n_long_trades": performance_metrics["n_long"],
+        "n_short_trades": performance_metrics["n_short"],
+        "conf_matrix": json.dumps(performance_metrics["confusion_matrix"]),
+        "perm_p_value": performance_metrics["perm_p_value"],
+        "model_path": performance_metrics["model_path"],
+        "config_path": performance_metrics["config_path"]
+    }
+
+    log_dir = os.path.join(Path(f"logs/{symbol}/performance/test"), quantile_folder)
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(Path(f"{log_dir}"), "generalization.csv")
+    df = pd.DataFrame([log_entry])
+
+    if os.path.exists(log_file):
+        df_existing = pd.read_csv(log_file)
+        df = pd.concat([df_existing, df], ignore_index=True)
+
+    df.to_csv(log_file, index=False)
+
+    with open(log_entry["config_path"], 'w') as f:
+        json.dump(config, f, indent=4)
+
+def permutation_test(y_true, y_pred, lower_q, upper_q, n_perm, seed=42):
+    """
+    Conducts a permutation test to check if the sharpe ratio from predicted signals is statistically significant.
+    Shuffles the true labels and recomputes sharpe repeatedly.
+    """
+    np.random.seed(seed)
+    
+    # Gets true strategy returns
+    s_thresh = np.quantile(y_pred, lower_q)
+    l_thresh = np.quantile(y_pred, upper_q)
+    s_mask = y_pred <= s_thresh
+    l_mask = y_pred >= l_thresh
+    s_returns = -(np.exp(y_true[s_mask].dropna()) - 1).values
+    l_returns = (np.exp(y_true[l_mask].dropna()) - 1).values
+    all_returns = np.concatenate([s_returns, l_returns])
+    real_sharpe = np.mean(all_returns) / np.std(all_returns, ddof=1)
+
+    # Generates null distribution
+    perm_sharpes = []
+
+    for _ in range(n_perm):
+        shuffled = np.random.permutation(y_true.values)
+        perm_returns = np.concatenate([
+            -(np.exp(shuffled[s_mask]) - 1),
+            (np.exp(shuffled[l_mask]) - 1)
+        ])
+
+        if np.std(perm_returns, ddof=1) > 0:
+            perm_sharpes.append(np.mean(perm_returns) / np.std(perm_returns, ddof=1))
+
+    p_value = np.mean(np.array(perm_sharpes) >= real_sharpe)
+
+    return p_value
+
+# -----------------------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------------------
+
+# Defines data paths
+market_data_path = Path("market_data")
+derived_data_path = Path("derived_data")
+
+# Reads all market data files
+market_data_files = sorted(market_data_path.glob("*.csv"))
+
+for asset in market_data_files:
+    symbol = Path(asset).stem.upper()
+    features_path = Path(f"{derived_data_path}/{symbol}/X_pca.csv")
+    target_path = Path(f"{derived_data_path}/{symbol}/y.csv")
+
+    # Loads features, targets and splits data
+    X = pd.read_csv(features_path, index_col='date')
+    y = pd.read_csv(target_path, index_col='date')
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, shuffle=False)
+
+    # Saves splitted data
+    X_train.to_csv(Path(f"{derived_data_path}/{symbol}/X_train.csv"), index=True, header=True)
+    X_test.to_csv(Path(f"{derived_data_path}/{symbol}/X_test.csv"), index=True, header=True)
+    y_train.to_csv(Path(f"{derived_data_path}/{symbol}/y_train.csv"), index=True, header=True)
+    y_test.to_csv(Path(f"{derived_data_path}/{symbol}/y_test.csv"), index=True, header=True)
+
+    n_trials = 20
+    initial_lr = 0.001
+    quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95), (0.1, 0.9)]
+    print(f"\nTraining and evaluating: {symbol}")
+
+    for ql, qu in quantile_pairs:
+        print(f"\nQuantile pair: {ql:.2f}, {qu:.2f}")
+        quantile_folder = f"{int(ql*100):02d}_{int(qu*100):02d}"
+
+        for trial_id in range(n_trials):
+            print(f"\nTrial {trial_id}")
+
+            # Randomized model configuration
+            window_size = np.random.randint(30, 45)
+
+            # Prepares adaptative Huber loss
+            res_win = deque(maxlen=365)
+            DELTA_MIN, DELTA_MAX = 1e-4, 10.0
+            DELTA_SCALE = 1.0           
+            WARMUP_MIN = 30
+            delta_var = tf.Variable(1.0, trainable=False, dtype=tf.float32)
+            loss_fn = adaptative_huber_loss(delta_var)
+            
+            config = {"window size": float(window_size), "lr": float(initial_lr)}
+            print(f"Configuration: {config}")
+
+            for target in y_train.columns:
+                print(f"\nTarget: {target}")
+
+                # Reshapes data
+                X_train_seq, y_train_seq = reshape_data(X_train, y_train[target], window_size)
+                X_test_seq, y_test_seq = reshape_data(X_test, y_test[target], window_size)
+
+                # Initializes model
+                model = get_model(window_size, input_shape=(window_size, X.shape[1]))
+                # model.summary()
+                
+                # Setsup optimizer and compiles model
+                model.compile(optimizer=Adam(learning_rate=initial_lr), loss=loss_fn)
+
+                # Online training (walk-forward validation style)
+                train_loss, preds, truths = [], [], []
+                training_mae, validation_mae = [], []
+
+                for i in range(len(X_train_seq) - 1):
+                    history = model.train_on_batch(X_train_seq[i:i+1], y_train_seq[i:i+1])  
+                    train_loss.append(history)                                                       
+                    truths.append(y_train_seq[i+1])
+                    pred = model.predict(X_train_seq[i+1:i+2], verbose=0)[0][0]                    
+                    preds.append(pred)
+                    res_win.append(float(y_train_seq[i+1] - pred)) 
+
+                    # Updates delta hyperparameter from adaptative Huber loss
+                    if len(res_win) >= WARMUP_MIN:
+                        sigma = calculate_robust_sigma_from_residuals(res_win)
+                        new_delta = float(np.clip(DELTA_SCALE * sigma, DELTA_MIN, DELTA_MAX))
+                        delta_var.assign(new_delta)                                                                    
+
+                    # Analyzes training and validation error metrics
+                    if (i+1) % 200 == 0 or i == len(X_train) - 2:
+                        current_train_mae = np.mean(train_loss[-200:])
+                        current_val_mae = mean_absolute_error(truths[-200:], preds[-200:])
+                        training_mae.append(current_train_mae)
+                        validation_mae.append(current_val_mae)
+                        print(f"Samples {i+1}/{len(X_train)-1} - Delta: {new_delta:.4f} - Training MAE: {current_train_mae:.4f} - Validation MAE: {current_val_mae:.4f}", end='\n')
+
+                    # Analyzes validation performance metrics
+                    if (i+1) % 365 == 0 and len(truths) >= 365:
+                        y_truths = pd.DataFrame(truths[-365:], columns=[target])
+                        y_preds = pd.DataFrame(preds[-365:], columns=[target])
+
+                        # quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95)]
+                        # quantile_pairs = [(0.1, 0.9)]
+                        # validation_performance_metrics = find_best_quantile_performance_metrics(y_truths, y_preds, quantile_pairs)
+                        validation_performance_metrics = calculate_performance_metrics(y_truths, y_preds, ql, qu)
+                        validation_performance_metrics["quantiles"] = (ql, qu)
+                        log_validation(symbol, trial_id, target, i+1, validation_performance_metrics, quantile_folder)
+
+                # Evaluates generalization on test set
+                y_pred = model.predict(X_test_seq, verbose=0)
+                y_pred = pd.DataFrame(y_pred, columns=[target])
+                y_pred.reset_index(drop=True, inplace=True)
+
+                y_true = pd.DataFrame(y_test_seq, columns=[target])
+                y_true.reset_index(drop=True, inplace=True)
+
+                # quantile_pairs = [(0.01, 0.99), (0.02, 0.98), (0.05, 0.95)]
+                # quantile_pairs = [(0.1, 0.9)]
+                # evalutation_performance_metrics = find_best_quantile_performance_metrics(y_true, y_pred, quantile_pairs)
+                evalutation_performance_metrics = calculate_performance_metrics(y_true, y_pred, ql, qu)
+                evalutation_performance_metrics["quantiles"] = (ql, qu)
+
+                # Conducts a permutation test (sanity check)
+                evalutation_performance_metrics["perm_p_value"] = permutation_test(y_true, y_pred, ql, qu, n_perm=1000)
+
+                # Manages the directories and paths where model is saved
+                model_dir = os.path.join(Path(f"models/{symbol}"), quantile_folder)
+                os.makedirs(model_dir, exist_ok=True)
+                model_path = os.path.join(model_dir, Path(f"{trial_id}_{target}.h5"))
+                evalutation_performance_metrics["model_path"] = model_path
+                model.save(model_path, include_optimizer=False)
+
+                # Manages the directories and paths where architecture is saved
+                arch_dir = os.path.join(Path(f"architectures/{symbol}"), quantile_folder)
+                os.makedirs(arch_dir, exist_ok=True)
+                config_path = os.path.join(arch_dir, Path(f"{trial_id}.json"))
+                evalutation_performance_metrics["config_path"] = config_path
+
+                log_evaluation(symbol, trial_id, target, evalutation_performance_metrics, config, quantile_folder)
+
+                # Deletes model and clears memory
+                del model
+                K.clear_session()
+                gc.collect()
+                print("\n")

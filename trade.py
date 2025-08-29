@@ -322,6 +322,7 @@ def close_existing_position(k: KrakenClient, state: dict):
     if state.get("side") == "buy":
         vol = calculate_order_volume(k)
 
+
         if vol > 0:
             k.add_order(PAIR, "sell", "market", vol, leverage=None)
 
@@ -347,6 +348,7 @@ def open_new_position(k: KrakenClient, side: str, leverage: float):
 
             if vol > 0:
                 k.add_order(PAIR, "sell", "market", vol, leverage=leverage)
+
         else:
             vol = calculate_order_volume(k)
 
@@ -379,7 +381,7 @@ def trade(advisor_info: pd.Series, decision: str, leverage: float, state_path: s
                     "is_open": False,
                     "side": None,
                     "open_time": None,
-                    "days_open": 1,
+                    "days_open": 0,
                     "target_days": 0,
                     "leverage": 1.0
                 }
